@@ -9,12 +9,30 @@ import (
 	"github.com/joho/godotenv"; 
 	"os"; 
 	"database/sql"; 
-	"Chirpy/internal/database"
+	"Chirpy/internal/database";
+	"time";
+	"github.com/google/uuid";
 	)
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries *database.Queries
+	platform string
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
+type Chirp struct{
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -32,9 +50,130 @@ func (cfg *apiConfig) middlewareMetricsPrint() http.Handler {
 	})
 }
 
-func (cfg *apiConfig) middlewareMetricsReset() http.Handler {
+func (cfg *apiConfig) DBReset() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg.fileserverHits.Store(0)
+		//cfg.fileserverHits.Store(0)
+		if cfg.platform != "dev"{
+			respondWithError(w, 403, "Forbidden")
+			return
+		}
+		err := cfg.dbQueries.DeleteAllUsers(r.Context())
+		if err != nil {
+			respondWithError(w, 500, "Error Deleting Users")
+		}
+	})
+}
+
+func (cfg *apiConfig) DBCreateUser() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		type email struct{
+			Address string `json:"email"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		emailAddress := email{}
+		err := decoder.Decode(&emailAddress)
+		if err != nil {
+			respondWithError(w, 500, "Error Decoding JSON")
+			return
+		}
+
+		dbUsr, err := cfg.dbQueries.CreateUser(r.Context(), emailAddress.Address)
+		if err != nil{
+			respondWithError(w, 500, "Cannot Create User")
+			return
+		}
+
+		usr := User{
+			ID: dbUsr.ID,
+			CreatedAt: dbUsr.CreatedAt,
+			UpdatedAt: dbUsr.UpdatedAt,
+			Email: dbUsr.Email,
+		}
+		
+		respondWithJSON(w, 201, usr)
+
+	})
+}
+
+func (cfg *apiConfig) DBCreateChirp() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request){
+		type params struct {
+			Body string `json:"body"`
+			UserID uuid.UUID `json:"user_id"`
+		}
+		
+		decoder := json.NewDecoder(r.Body)
+		chirpParams := params{}
+		err := decoder.Decode(&chirpParams)
+		if err != nil {
+			respondWithError(w, 500, "Error Decoding JSON")
+			return
+		}
+		if len(chirpParams.Body) > 140{
+			respondWithError(w, 400, "Chirp is too long")
+			return
+		}
+
+		bodySlice := strings.Split(chirpParams.Body, " ")
+		cleanBody := ""
+		for _, val := range bodySlice{
+			if cleanBody != ""{
+				cleanBody += " "
+			}
+
+			lowVal := strings.ToLower(val)
+			if lowVal == "kerfuffle" || lowVal == "sharbert" || lowVal == "fornax"{
+				cleanBody += "****"
+				continue
+			}
+			cleanBody += val
+		
+		}
+
+		newChirpParams := database.CreateChirpParams{
+			Body: cleanBody,
+			UserID: chirpParams.UserID,
+		}
+		newChirp, err := cfg.dbQueries.CreateChirp(r.Context(), newChirpParams)
+		if err != nil {
+			respondWithError(w, 500, "Cannot Create Chirp")
+			return
+		}
+
+		chirp := Chirp{
+			ID: newChirp.ID,
+			CreatedAt: newChirp.CreatedAt,
+			UpdatedAt: newChirp.UpdatedAt,
+			Body: newChirp.Body,
+			UserID: newChirp.UserID,
+		}
+
+		respondWithJSON(w, 201, chirp)
+
+	})
+}
+
+func (cfg *apiConfig) DBGetAllChirps() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request){
+		allChirps, err := cfg.dbQueries.GetAllChirps(r.Context())
+		if err != nil {
+			respondWithError(w, 500, "Error Getting Chirps")
+			return
+		}
+
+		returnChirps := []Chirp{}
+		for _, chirp := range allChirps{
+			newChirp := Chirp{
+				ID: chirp.ID,
+				CreatedAt: chirp.CreatedAt,
+				UpdatedAt: chirp.UpdatedAt,
+				Body: chirp.Body,
+				UserID: chirp.UserID,
+			}
+			returnChirps = append(returnChirps, newChirp)
+		}
+
+		respondWithJSON(w, 200, returnChirps)
 	})
 }
 
@@ -70,6 +209,7 @@ func respondWithError(w http.ResponseWriter, code int, msg string){
 func main(){
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
+	platform := os.Getenv("PLATFORM")
 	db, _ := sql.Open("postgres", dbURL)
 	dbQueries := database.New(db)
 
@@ -86,54 +226,18 @@ func main(){
 	}
 	mux.HandleFunc("GET /api/healthz", h1)
 
-	validator := func(w http.ResponseWriter, r *http.Request){
-		type chirp struct {
-			Body string `json:"body"`
-		}
-		type returnVals struct {
-			Clean string `json:"cleaned_body"`
-		}
-
-		decoder := json.NewDecoder(r.Body)
-		chirpText := chirp{}
-		err := decoder.Decode(&chirpText)
-		if err != nil {
-			respondWithError(w, 500, "Error Decoding JSON")
-			return
-		}
-		if len(chirpText.Body) > 140{
-			respondWithError(w, 400, "Chirp is too long")
-			return
-		}
-		bodySlice := strings.Split(chirpText.Body, " ")
-		cleanBody := ""
-		for _, val := range bodySlice{
-			if cleanBody != ""{
-				cleanBody += " "
-			}
-
-			lowVal := strings.ToLower(val)
-			if lowVal == "kerfuffle" || lowVal == "sharbert" || lowVal == "fornax"{
-				cleanBody += "****"
-				continue
-			}
-			cleanBody += val
-		
-		}
-
-		respBody := returnVals { Clean: cleanBody, }
-		respondWithJSON(w, 200, respBody)
-	}
-	mux.HandleFunc("POST /api/validate_chirp", validator)
-
 
 	apiCfg := apiConfig{}
 	apiCfg.dbQueries = dbQueries
+	apiCfg.platform = platform
 	fileSer := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fileSer))
 
 	mux.Handle("GET /admin/metrics", apiCfg.middlewareMetricsPrint())
-	mux.Handle("POST /admin/reset", apiCfg.middlewareMetricsReset())
+	mux.Handle("POST /admin/reset", apiCfg.DBReset())
+	mux.Handle("POST /api/users", apiCfg.DBCreateUser())
+	mux.Handle("POST /api/chirps", apiCfg.DBCreateChirp())
+	mux.Handle("GET /api/chirps", apiCfg.DBGetAllChirps())
 	
 	
 	ser.ListenAndServe()
