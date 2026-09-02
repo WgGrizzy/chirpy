@@ -1,6 +1,7 @@
 package main
 
 import (
+	"Chirpy/internal/auth"
 	"Chirpy/internal/database"
 	"database/sql"
 	"encoding/json"
@@ -47,8 +48,14 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 func (cfg *apiConfig) middlewareMetricsPrint() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Contet-Type", "text/html; charset=utf-8")
-		w.Write(([]byte)(fmt.Sprintf(
-			"<html><body><h1>Welcome, Chirpy Admin</h1><p>Chirpy has been visited %d times!</p></body></html>", cfg.fileserverHits.Load())))
+		w.Write(fmt.Appendf(nil,
+			`<html>
+				<body>
+					<h1>Welcome, Chirpy Admin</h1>
+					<p>Chirpy has been visited %d times!</p>
+				</body>
+			</html>`,
+			cfg.fileserverHits.Load()))
 	})
 }
 
@@ -68,18 +75,30 @@ func (cfg *apiConfig) DBReset() http.Handler {
 
 func (cfg *apiConfig) DBCreateUser() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		type email struct {
-			Address string `json:"email"`
+		type NewUserInfo struct {
+			Address  string `json:"email"`
+			Password string `json:"password"`
 		}
 		decoder := json.NewDecoder(r.Body)
-		emailAddress := email{}
-		err := decoder.Decode(&emailAddress)
+		newUser := NewUserInfo{}
+		err := decoder.Decode(&newUser)
 		if err != nil {
 			respondWithError(w, 500, "Error Decoding JSON")
 			return
 		}
 
-		dbUsr, err := cfg.dbQueries.CreateUser(r.Context(), emailAddress.Address)
+		hashed_pass, err := auth.HashPassword(newUser.Password)
+		if err != nil {
+			respondWithError(w, 500, "Error Hashing Password")
+			return
+		}
+
+		params := database.CreateUserParams{
+			Email:          newUser.Address,
+			HashedPassword: hashed_pass,
+		}
+
+		dbUsr, err := cfg.dbQueries.CreateUser(r.Context(), params)
 		if err != nil {
 			respondWithError(w, 500, "Cannot Create User")
 			return
@@ -94,6 +113,43 @@ func (cfg *apiConfig) DBCreateUser() http.Handler {
 
 		respondWithJSON(w, 201, usr)
 
+	})
+}
+
+func (cfg *apiConfig) DBLogin() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		type LoginInfo struct {
+			Password string `json:"password"`
+			Email    string `json:"email"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		login := LoginInfo{}
+		err := decoder.Decode(&login)
+		if err != nil {
+			respondWithError(w, 500, "Error Decoding JSON")
+			return
+		}
+
+		userByEmail, err := cfg.dbQueries.GetUserByEmail(r.Context(), login.Email)
+		if err != nil {
+			respondWithError(w, 401, "Unauthorized")
+			return
+		}
+
+		passMatch, err := auth.CheckPasswordHash(login.Password, userByEmail.HashedPassword)
+		if !passMatch || err != nil {
+			respondWithError(w, 401, "Unauthroized")
+			return
+		}
+
+		returnUser := User{
+			ID:        userByEmail.ID,
+			CreatedAt: userByEmail.CreatedAt,
+			UpdatedAt: userByEmail.UpdatedAt,
+			Email:     userByEmail.Email,
+		}
+		respondWithJSON(w, 200, returnUser)
 	})
 }
 
@@ -260,6 +316,7 @@ func main() {
 
 	mux.Handle("GET /api/chirps/{id}", apiCfg.DBGetChirpByID())
 	mux.Handle("GET /api/chirps", apiCfg.DBGetAllChirps())
+	mux.Handle("POST /api/login", apiCfg.DBLogin())
 
 	ser.ListenAndServe()
 }
