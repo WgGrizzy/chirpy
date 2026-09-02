@@ -1,23 +1,25 @@
 package main
+
 import (
-	"net/http"; 
-	"sync/atomic"; 
-	"fmt"; 
-	"encoding/json"; 
-	"strings";
-	_ "github.com/lib/pq"; 
-	"github.com/joho/godotenv"; 
-	"os"; 
-	"database/sql"; 
-	"Chirpy/internal/database";
-	"time";
-	"github.com/google/uuid";
-	)
+	"Chirpy/internal/database"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
+)
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
-	dbQueries *database.Queries
-	platform string
+	dbQueries      *database.Queries
+	platform       string
 }
 
 type User struct {
@@ -27,7 +29,7 @@ type User struct {
 	Email     string    `json:"email"`
 }
 
-type Chirp struct{
+type Chirp struct {
 	ID        uuid.UUID `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -38,7 +40,7 @@ type Chirp struct{
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg.fileserverHits.Add(1)
-		next.ServeHTTP(w,r)
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -53,7 +55,7 @@ func (cfg *apiConfig) middlewareMetricsPrint() http.Handler {
 func (cfg *apiConfig) DBReset() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		//cfg.fileserverHits.Store(0)
-		if cfg.platform != "dev"{
+		if cfg.platform != "dev" {
 			respondWithError(w, 403, "Forbidden")
 			return
 		}
@@ -66,7 +68,7 @@ func (cfg *apiConfig) DBReset() http.Handler {
 
 func (cfg *apiConfig) DBCreateUser() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		type email struct{
+		type email struct {
 			Address string `json:"email"`
 		}
 		decoder := json.NewDecoder(r.Body)
@@ -78,30 +80,30 @@ func (cfg *apiConfig) DBCreateUser() http.Handler {
 		}
 
 		dbUsr, err := cfg.dbQueries.CreateUser(r.Context(), emailAddress.Address)
-		if err != nil{
+		if err != nil {
 			respondWithError(w, 500, "Cannot Create User")
 			return
 		}
 
 		usr := User{
-			ID: dbUsr.ID,
+			ID:        dbUsr.ID,
 			CreatedAt: dbUsr.CreatedAt,
 			UpdatedAt: dbUsr.UpdatedAt,
-			Email: dbUsr.Email,
+			Email:     dbUsr.Email,
 		}
-		
+
 		respondWithJSON(w, 201, usr)
 
 	})
 }
 
 func (cfg *apiConfig) DBCreateChirp() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request){
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		type params struct {
-			Body string `json:"body"`
+			Body   string    `json:"body"`
 			UserID uuid.UUID `json:"user_id"`
 		}
-		
+
 		decoder := json.NewDecoder(r.Body)
 		chirpParams := params{}
 		err := decoder.Decode(&chirpParams)
@@ -109,29 +111,29 @@ func (cfg *apiConfig) DBCreateChirp() http.Handler {
 			respondWithError(w, 500, "Error Decoding JSON")
 			return
 		}
-		if len(chirpParams.Body) > 140{
+		if len(chirpParams.Body) > 140 {
 			respondWithError(w, 400, "Chirp is too long")
 			return
 		}
 
 		bodySlice := strings.Split(chirpParams.Body, " ")
 		cleanBody := ""
-		for _, val := range bodySlice{
-			if cleanBody != ""{
+		for _, val := range bodySlice {
+			if cleanBody != "" {
 				cleanBody += " "
 			}
 
 			lowVal := strings.ToLower(val)
-			if lowVal == "kerfuffle" || lowVal == "sharbert" || lowVal == "fornax"{
+			if lowVal == "kerfuffle" || lowVal == "sharbert" || lowVal == "fornax" {
 				cleanBody += "****"
 				continue
 			}
 			cleanBody += val
-		
+
 		}
 
 		newChirpParams := database.CreateChirpParams{
-			Body: cleanBody,
+			Body:   cleanBody,
 			UserID: chirpParams.UserID,
 		}
 		newChirp, err := cfg.dbQueries.CreateChirp(r.Context(), newChirpParams)
@@ -141,11 +143,11 @@ func (cfg *apiConfig) DBCreateChirp() http.Handler {
 		}
 
 		chirp := Chirp{
-			ID: newChirp.ID,
+			ID:        newChirp.ID,
 			CreatedAt: newChirp.CreatedAt,
 			UpdatedAt: newChirp.UpdatedAt,
-			Body: newChirp.Body,
-			UserID: newChirp.UserID,
+			Body:      newChirp.Body,
+			UserID:    newChirp.UserID,
 		}
 
 		respondWithJSON(w, 201, chirp)
@@ -154,7 +156,7 @@ func (cfg *apiConfig) DBCreateChirp() http.Handler {
 }
 
 func (cfg *apiConfig) DBGetAllChirps() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request){
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		allChirps, err := cfg.dbQueries.GetAllChirps(r.Context())
 		if err != nil {
 			respondWithError(w, 500, "Error Getting Chirps")
@@ -162,13 +164,13 @@ func (cfg *apiConfig) DBGetAllChirps() http.Handler {
 		}
 
 		returnChirps := []Chirp{}
-		for _, chirp := range allChirps{
+		for _, chirp := range allChirps {
 			newChirp := Chirp{
-				ID: chirp.ID,
+				ID:        chirp.ID,
 				CreatedAt: chirp.CreatedAt,
 				UpdatedAt: chirp.UpdatedAt,
-				Body: chirp.Body,
-				UserID: chirp.UserID,
+				Body:      chirp.Body,
+				UserID:    chirp.UserID,
 			}
 			returnChirps = append(returnChirps, newChirp)
 		}
@@ -177,7 +179,28 @@ func (cfg *apiConfig) DBGetAllChirps() http.Handler {
 	})
 }
 
-func respondWithJSON(w http.ResponseWriter, code int, payload interface{}){
+func (cfg *apiConfig) DBGetChirpByID() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, err := uuid.Parse(r.PathValue("id"))
+		searchVal, err := cfg.dbQueries.GetChirpByID(r.Context(), id)
+		if err != nil {
+			respondWithError(w, 404, "No Chirp Found")
+			return
+		}
+
+		chirp := Chirp{
+			ID:        searchVal.ID,
+			CreatedAt: searchVal.CreatedAt,
+			UpdatedAt: searchVal.UpdatedAt,
+			Body:      searchVal.Body,
+			UserID:    searchVal.UserID,
+		}
+
+		respondWithJSON(w, 200, chirp)
+	})
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		w.WriteHeader(500)
@@ -188,11 +211,11 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}){
 	w.Write(data)
 }
 
-func respondWithError(w http.ResponseWriter, code int, msg string){
+func respondWithError(w http.ResponseWriter, code int, msg string) {
 	type returnErr struct {
 		Msg string `json:"error"`
 	}
-	respBody := returnErr{ Msg: msg, }
+	respBody := returnErr{Msg: msg}
 
 	data, err := json.Marshal(respBody)
 	if err != nil {
@@ -203,10 +226,9 @@ func respondWithError(w http.ResponseWriter, code int, msg string){
 	w.WriteHeader(code)
 	w.Write(data)
 
-
 }
 
-func main(){
+func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
@@ -218,14 +240,12 @@ func main(){
 	ser.Handler = mux
 	ser.Addr = ":8080"
 
-
-	h1 := func(w http.ResponseWriter, _ *http.Request){
+	h1 := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Contet-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(200)
 		w.Write(([]byte)("OK"))
 	}
 	mux.HandleFunc("GET /api/healthz", h1)
-
 
 	apiCfg := apiConfig{}
 	apiCfg.dbQueries = dbQueries
@@ -237,8 +257,9 @@ func main(){
 	mux.Handle("POST /admin/reset", apiCfg.DBReset())
 	mux.Handle("POST /api/users", apiCfg.DBCreateUser())
 	mux.Handle("POST /api/chirps", apiCfg.DBCreateChirp())
+
+	mux.Handle("GET /api/chirps/{id}", apiCfg.DBGetChirpByID())
 	mux.Handle("GET /api/chirps", apiCfg.DBGetAllChirps())
-	
-	
+
 	ser.ListenAndServe()
 }
