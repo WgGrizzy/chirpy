@@ -1,6 +1,12 @@
 package auth
 
-import "testing"
+import (
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+)
 
 func TestHash(t *testing.T) {
 	password := "password1$"
@@ -22,4 +28,42 @@ func TestCompare(t *testing.T) {
 		t.Error(err)
 	}
 	t.Logf("%v", match)
+}
+
+func TestMakeAndValidateJWT(t *testing.T) {
+	id := uuid.New()
+	t.Logf("User Id: %s", id)
+	tokenSecret := "MySecretKey"
+	expire := 10 * time.Minute
+	signed, err := MakeJWT(id, tokenSecret, expire)
+	if err != nil {
+		t.Error(err)
+	}
+	t.Logf("Signed Token: %s", signed)
+
+	validateId, err := ValidateJWT(signed, tokenSecret)
+	if err != nil {
+		t.Error(err)
+	}
+	t.Logf("Validate User ID: %s", validateId.String())
+
+}
+
+func TestGetBearerToken(t *testing.T) {
+	headers := http.Header{}
+	headers.Add("Authorization", "Bearer abcdefg")
+	token, err := GetBearerToken(headers)
+	if err != nil {
+		t.Error(err)
+	}
+	t.Log(token)
+}
+
+func TestTest(t *testing.T) {
+	x, _ := time.Parse(time.RFC3339, "2021-07-01T00:00:00Z")
+	t.Log(x.String())
+	y := time.Now()
+	t.Log(y.String())
+	t.Logf("%v", y.Compare(x))
+
 }
