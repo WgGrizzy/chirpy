@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -60,10 +61,20 @@ func TestGetBearerToken(t *testing.T) {
 }
 
 func TestTest(t *testing.T) {
-	x, _ := time.Parse(time.RFC3339, "2021-07-01T00:00:00Z")
-	t.Log(x.String())
-	y := time.Now()
-	t.Log(y.String())
-	t.Logf("%v", y.Compare(x))
+	type Dee struct {
+		User_ID string
+	}
+	type Bee struct {
+		Event string
+		Data  Dee
+	}
+	bee := Bee{
+		Event: "abc",
+		Data: Dee{
+			User_ID: "def",
+		},
+	}
+	d, _ := json.Marshal(bee)
+	t.Log(string(d))
 
 }

@@ -70,10 +70,11 @@ func (cfg *apiConfig) DBReset() http.Handler {
 func (cfg *apiConfig) DBCreateUser() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		type User struct {
-			ID        uuid.UUID `json:"id"`
-			CreatedAt time.Time `json:"created_at"`
-			UpdatedAt time.Time `json:"updated_at"`
-			Email     string    `json:"email"`
+			ID          uuid.UUID `json:"id"`
+			CreatedAt   time.Time `json:"created_at"`
+			UpdatedAt   time.Time `json:"updated_at"`
+			Email       string    `json:"email"`
+			IsChirpyRed bool      `json:"is_chirpy_red"`
 		}
 		type NewUserInfo struct {
 			Address  string `json:"email"`
@@ -105,10 +106,11 @@ func (cfg *apiConfig) DBCreateUser() http.Handler {
 		}
 
 		usr := User{
-			ID:        dbUsr.ID,
-			CreatedAt: dbUsr.CreatedAt,
-			UpdatedAt: dbUsr.UpdatedAt,
-			Email:     dbUsr.Email,
+			ID:          dbUsr.ID,
+			CreatedAt:   dbUsr.CreatedAt,
+			UpdatedAt:   dbUsr.UpdatedAt,
+			Email:       dbUsr.Email,
+			IsChirpyRed: dbUsr.IsChirpyRed,
 		}
 
 		respondWithJSON(w, 201, usr)
@@ -123,10 +125,11 @@ func (cfg *apiConfig) DBUpdateUser() http.Handler {
 			Email    string `json:"email"`
 		}
 		type User struct {
-			ID        uuid.UUID `json:"id"`
-			CreatedAt time.Time `json:"created_at"`
-			UpdatedAt time.Time `json:"updated_at"`
-			Email     string    `json:"email"`
+			ID          uuid.UUID `json:"id"`
+			CreatedAt   time.Time `json:"created_at"`
+			UpdatedAt   time.Time `json:"updated_at"`
+			Email       string    `json:"email"`
+			IsChirpyRed bool      `json:"is_chirpy_red"`
 		}
 
 		access, err := auth.GetBearerToken(r.Header)
@@ -164,10 +167,11 @@ func (cfg *apiConfig) DBUpdateUser() http.Handler {
 		}
 
 		user := User{
-			ID:        updatedUser.ID,
-			CreatedAt: updatedUser.CreatedAt,
-			UpdatedAt: updatedUser.UpdatedAt,
-			Email:     updatedUser.Email,
+			ID:          updatedUser.ID,
+			CreatedAt:   updatedUser.CreatedAt,
+			UpdatedAt:   updatedUser.UpdatedAt,
+			Email:       updatedUser.Email,
+			IsChirpyRed: updatedUser.IsChirpyRed,
 		}
 		respondWithJSON(w, 200, user)
 	})
@@ -180,12 +184,13 @@ func (cfg *apiConfig) DBLogin() http.Handler {
 			Email    string `json:"email"`
 		}
 		type User struct {
-			ID        uuid.UUID `json:"id"`
-			CreatedAt time.Time `json:"created_at"`
-			UpdatedAt time.Time `json:"updated_at"`
-			Email     string    `json:"email"`
-			Token     string    `json:"token"`
-			Refresh   string    `json:"refresh_token"`
+			ID          uuid.UUID `json:"id"`
+			CreatedAt   time.Time `json:"created_at"`
+			UpdatedAt   time.Time `json:"updated_at"`
+			Email       string    `json:"email"`
+			IsChirpyRed bool      `json:"is_chirpy_red"`
+			Token       string    `json:"token"`
+			Refresh     string    `json:"refresh_token"`
 		}
 
 		decoder := json.NewDecoder(r.Body)
@@ -224,12 +229,13 @@ func (cfg *apiConfig) DBLogin() http.Handler {
 		}
 
 		returnUser := User{
-			ID:        userByEmail.ID,
-			CreatedAt: userByEmail.CreatedAt,
-			UpdatedAt: userByEmail.UpdatedAt,
-			Email:     userByEmail.Email,
-			Token:     authToken,
-			Refresh:   refresh,
+			ID:          userByEmail.ID,
+			CreatedAt:   userByEmail.CreatedAt,
+			UpdatedAt:   userByEmail.UpdatedAt,
+			Email:       userByEmail.Email,
+			IsChirpyRed: userByEmail.IsChirpyRed,
+			Token:       authToken,
+			Refresh:     refresh,
 		}
 		respondWithJSON(w, 200, returnUser)
 	})
@@ -392,6 +398,87 @@ func (cfg *apiConfig) DBGetChirpByID() http.Handler {
 	})
 }
 
+func (cfg *apiConfig) DBDeleteChirpByID() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chirpID, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			respondWithError(w, 401, "Invalid ID")
+			return
+		}
+
+		authToken, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			respondWithError(w, 401, "Unauthorized")
+			return
+		}
+
+		isValid, err := auth.ValidateJWT(authToken, cfg.keySecret)
+		if err != nil || isValid == uuid.Nil {
+			respondWithError(w, 401, "Unauthorized")
+			return
+		}
+
+		chirpByID, err := cfg.dbQueries.GetChirpByID(r.Context(), chirpID)
+		if err != nil {
+			respondWithError(w, 404, "Chirp Not Found")
+			return
+		}
+
+		if chirpByID.UserID != isValid {
+			respondWithError(w, 403, "Unauthorized to delete this chirp")
+			return
+		}
+
+		err = cfg.dbQueries.DeleteChirpByID(r.Context(), chirpID)
+		if err != nil {
+			respondWithError(w, 404, "Chirp Not Found")
+			return
+		}
+
+		w.WriteHeader(204)
+	})
+}
+
+func (cfg *apiConfig) DBUpgradeUserChirpyRed() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		type EventInfoData struct {
+			UserId string `json:"user_id"`
+		}
+		type EventInfo struct {
+			Event string        `json:"event"`
+			Data  EventInfoData `json:"data"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		eventInfo := EventInfo{}
+		err := decoder.Decode(&eventInfo)
+		if err != nil {
+			respondWithError(w, 500, "Error Decoding JSON")
+			return
+		}
+
+		if eventInfo.Event != "user.upgraded" {
+			w.WriteHeader(204)
+			return
+		}
+
+		user_id, err := uuid.Parse(eventInfo.Data.UserId)
+		if err != nil {
+			respondWithError(w, 500, "Could Not Parse ID")
+			return
+		}
+
+		err = cfg.dbQueries.UpgradeUserChirpyRed(r.Context(), user_id)
+		if err != nil {
+			respondWithError(w, 404, "User Not Found")
+			return
+		}
+
+		w.WriteHeader(204)
+
+	})
+}
+
 func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -421,6 +508,7 @@ func respondWithError(w http.ResponseWriter, code int, msg string) {
 }
 
 func main() {
+	//Load Environment Variables and create database object
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
@@ -428,36 +516,50 @@ func main() {
 	db, _ := sql.Open("postgres", dbURL)
 	dbQueries := database.New(db)
 
+	//Creater Server Mux and connect to server
 	mux := http.NewServeMux()
 	ser := http.Server{}
 	ser.Handler = mux
 	ser.Addr = ":8080"
 
+	//Create config object and set it up
+	apiCfg := apiConfig{}
+	apiCfg.dbQueries = dbQueries
+	apiCfg.platform = platform
+	apiCfg.keySecret = keySecret
+
+	//Create fileserver and set up endpoints
+	fileSer := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
+	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fileSer))
+
+	//Create Endpoints for Admin actions and health check
 	h1 := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Contet-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(200)
 		w.Write(([]byte)("OK"))
 	}
 	mux.HandleFunc("GET /api/healthz", h1)
-
-	apiCfg := apiConfig{}
-	apiCfg.dbQueries = dbQueries
-	apiCfg.platform = platform
-	apiCfg.keySecret = keySecret
-	fileSer := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
-	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fileSer))
-
 	mux.Handle("GET /admin/metrics", apiCfg.middlewareMetricsPrint())
 	mux.Handle("POST /admin/reset", apiCfg.DBReset())
+
+	//Create Endpoints for User actions
 	mux.Handle("POST /api/users", apiCfg.DBCreateUser())
 	mux.Handle("PUT /api/users", apiCfg.DBUpdateUser())
-	mux.Handle("POST /api/chirps", apiCfg.DBCreateChirp())
 
-	mux.Handle("GET /api/chirps/{id}", apiCfg.DBGetChirpByID())
+	//Create Endpoints for Chirps actions
+	mux.Handle("POST /api/chirps", apiCfg.DBCreateChirp())
 	mux.Handle("GET /api/chirps", apiCfg.DBGetAllChirps())
+	mux.Handle("GET /api/chirps/{id}", apiCfg.DBGetChirpByID())
+	mux.Handle("DELETE /api/chirps/{id}", apiCfg.DBDeleteChirpByID())
+
+	//Create Endpoints for Authentication actions
 	mux.Handle("POST /api/login", apiCfg.DBLogin())
 	mux.Handle("POST /api/refresh", apiCfg.DBRefreshAccess())
 	mux.Handle("POST /api/revoke", apiCfg.DBRevokeAccess())
 
+	//Created Endpoints for Webhooks
+	mux.Handle("POST /api/polka/webhooks", apiCfg.DBUpgradeUserChirpyRed())
+
+	//Start the server
 	ser.ListenAndServe()
 }

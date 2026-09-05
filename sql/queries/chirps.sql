@@ -18,3 +18,7 @@ ORDER BY created_at ASC;
 Select *
 From Chirps
 WHERE id = $1;
+
+-- name: DeleteChirpByID :exec
+Delete From chirps
+WHERE id = $1;
